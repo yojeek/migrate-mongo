@@ -12,15 +12,51 @@ function printMigrated(migrated = []) {
   });
 }
 
-function handleError(err) {
+let unlock
+
+async function handleError(err) {
   console.error(`ERROR: ${err.message}`);
-  process.exit(1);
+
+  if (unlock) {
+    try {
+      await unlock()
+    } catch (e){
+      console.error(e);
+    }
+  }
+
+  process.exit(1)
 }
 
 function printStatusTable(statusItems) {
-  const table = new Table({ head: ["Filename", "Applied At"] });
+  const table = new Table({head: ["Filename", "Applied At"]});
   statusItems.forEach(item => table.push(_.values(item)));
   console.log(table.toString());
+}
+
+async function lock({db, client}) {
+  const {changelogCollectionName} = await migrateMongo.config.read();
+  const changelogCollection = db.collection(changelogCollectionName);
+
+  if (!await changelogCollection.findOne({locked: true})) {
+    const {insertedId} = await changelogCollection.insertOne({
+      locked: true,
+      createdAt: new Date()
+    })
+
+    console.info('migration db lock created')
+
+    unlock = async () => {
+      const { result } = await changelogCollection.remove({_id: insertedId})
+      if (result.n === 1) {
+        console.debug('migration db lock deleted')
+      }
+    }
+  } else {
+    throw new Error('migration db lock found')
+  }
+
+  return {db, client}
 }
 
 program.version(pkgjson.version);
@@ -63,10 +99,20 @@ program
     global.options = options;
     migrateMongo.database
       .connect()
+      .then(({db, client}) => lock({db, client}))
       .then(({db, client}) => migrateMongo.up(db, client))
-      .then(migrated => {
+      .then(async migrated => {
         printMigrated(migrated);
-        process.exit(0);
+
+        if (unlock) {
+          try {
+            await unlock()
+            process.exit(0)
+          } catch (e){
+            console.error(e);
+            process.exit(1)
+          }
+        }
       })
       .catch(err => {
         handleError(err);
@@ -82,12 +128,22 @@ program
     global.options = options;
     migrateMongo.database
       .connect()
+      .then(({db, client}) => lock({db, client}))
       .then(({db, client}) => migrateMongo.down(db, client))
-      .then(migrated => {
+      .then(async migrated => {
         migrated.forEach(migratedItem => {
           console.log(`MIGRATED DOWN: ${migratedItem}`);
         });
-        process.exit(0);
+
+        if (unlock) {
+          try {
+            await unlock()
+            process.exit(0)
+          } catch (e){
+            console.error(e);
+            process.exit(1)
+          }
+        }
       })
       .catch(err => {
         handleError(err);
