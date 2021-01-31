@@ -15,7 +15,7 @@ function printMigrated(migrated = []) {
 let unlock
 
 async function handleError(err) {
-  console.error(`ERROR: ${err.message}`);
+  console.trace(`ERROR: ${err.message}`);
 
   if (unlock) {
     try {
